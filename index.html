@@ -3209,8 +3209,8 @@ init();
 
 /* ===== ĐỒNG BỘ DỮ LIỆU LIÊN MÁY (Google Apps Script) =====
    Cấu hình CLOUD_URL và CLOUD_KEY sau khi triển khai GAS. */
-const CLOUD_URL='PASTE_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE';
-const CLOUD_KEY='CHANGE_THIS_SHARED_KEY';
+const CLOUD_URL='https://script.google.com/macros/s/AKfycbzfNj5byqdry3oPzQPXqf981zGEo9h5VI-MpemhNstTCgY62TUlzwCmWGCrVs4oYNM2Dg/exec';
+const CLOUD_KEY='NBT_SYNC_2026_XYZ123';
 let CLOUD_DIRTY=false,CLOUD_BUSY=false,CLOUD_LAST=0,CLOUD_TIMER=null;
 function cloudEnabled(){return CLOUD_URL.startsWith('https://')&&!CLOUD_URL.includes('PASTE_')&&CLOUD_KEY!=='CHANGE_THIS_SHARED_KEY'}
 function cloudMarkDirty(){if(cloudEnabled()&&!CLOUD_BUSY)CLOUD_DIRTY=true}
