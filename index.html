@@ -818,7 +818,7 @@ function importProducts(rows){
 }
 function mergeImportedProducts(p){const key=x=>U(x.product)+'|'+U(x.grade);const old=new Map(DB.products.map(x=>[key(x),x]));p.forEach(x=>{const o=old.get(key(x));if(o){if(o.paint)x.paint=o.paint;if(o.perBox!=null)x.perBox=o.perBox}});const ks=new Set(p.map(key));return DB.products.filter(x=>x.custom&&!ks.has(key(x))).concat(p)}
 function seedProducts(){return PRODUCTS_SEED.split(';').map(s=>{const p=s.split('|');const n=i=>p[i]==='-'?null:Number(p[i]);return {product:p[0],grade:p[1],ht:[n(2),n(3),n(4),n(5)]}})}
-function save(){try{localStorage.setItem(LS,JSON.stringify(DB))}catch(e){alert('Không lưu được dữ liệu: '+e.message)}try{if(syncHard())hdSave()}catch(e){console.error(e)}}
+function save(){try{localStorage.setItem(LS,JSON.stringify(DB))}catch(e){alert('Không lưu được dữ liệu: '+e.message)}try{if(syncHard())hdSave()}catch(e){console.error(e)}try{cloudMarkDirty()}catch(e){}}
 function load(){
   try{const s=localStorage.getItem(LS);if(s){const d=JSON.parse(s);DB.records=d.records||[];DB.products=d.products||[];DB.stds=migrateStds(d)}}catch(e){}
   if(!DB.products.length)DB.products=seedProducts();
@@ -1986,7 +1986,7 @@ function hdPack(h){const c=s=>String(s==null?'':s).replace(/[\t\r\n]+/g,' ');
 function hdUnpack(line){const a=line.split('\t'),h=hdNew();
   h.rid=a[0]||'';h.date=a[1]||'';h.melt=a[2]||'';h.grade=a[3]||'';h.product=a[4]||'';h.pcode=a[5]||'';
   h.ht=[6,7,8,9].map(i=>a[i]||'');h.t=[10,11,12,13].map(i=>a[i]||'');h.v=Array.from({length:12},(_,i)=>hdVal(a[14+i]));h.n=[26,27,28,29].map(i=>a[i]||'');h.by=a[30]||'';h.at=+a[31]||0;h.num=a[32]||'';return h}
-function hdSave(){try{localStorage.setItem(LS+'_hard',HARD.map(hdPack).join('\n'))}catch(e){toast('Không lưu được dữ liệu độ cứng (đầy bộ nhớ trình duyệt). Hãy tải bản sao lưu ở tab Dữ liệu.')}}
+function hdSave(){try{localStorage.setItem(LS+'_hard',HARD.map(hdPack).join('\n'))}catch(e){toast('Không lưu được dữ liệu độ cứng (đầy bộ nhớ trình duyệt). Hãy tải bản sao lưu ở tab Dữ liệu.')}try{cloudMarkDirty()}catch(e){}}
 function hdLoad(){try{const s=localStorage.getItem(LS+'_hard');HARD=s?s.split('\n').filter(Boolean).map(hdUnpack):[]}catch(e){HARD=[]}}
 const hdHasData=h=>h.v.some(x=>x!=null)||h.t.some(Boolean)||h.n.some(Boolean)||h.ht.slice(1).some(Boolean);
 /* Sinh danh sách mã sản phẩm của một dòng Bảng tổng:
@@ -2607,7 +2607,7 @@ function auLockCheck(){const ro=!canEdit('check');document.querySelectorAll('#st
 /* ===================== THÔNG SỐ LÒ NHIỆT LUYỆN ===================== */
 let FD={},FVIEW='ha',FPAGE=1e9,FGO_END=true,FPS=PSsaved('_ps_furn'),FROWS=[],FMAP={};
 function fLoad(){try{const s=localStorage.getItem(LS+'_furn');FD=s?JSON.parse(s):{}}catch(e){FD={}}FDV++}
-function fSave(){FDV++;try{localStorage.setItem(LS+'_furn',JSON.stringify(FD))}catch(e){toast('Không lưu được thông số lò (đầy bộ nhớ trình duyệt)')}}
+function fSave(){FDV++;try{localStorage.setItem(LS+'_furn',JSON.stringify(FD))}catch(e){toast('Không lưu được thông số lò (đầy bộ nhớ trình duyệt)')}try{cloudMarkDirty()}catch(e){}}
 const FT={
  ha:{name:'Hóa già',hint:'Mỗi mã lò hóa già nhập ở cột "Hóa già" của Bảng tổng tự có một dòng ở đây. Cần: thời gian giữ, tốc độ nâng nhiệt, thời gian bắt đầu và kết thúc.',
   cols:[['code','Mã lò hóa già',130,'ro'],['n','Số SP',54,'ro'],['lo','Số lò',130,'txt'],['gi','Thời gian giữ (h)',84,'num'],['nang','Tốc độ nâng nhiệt (°C/h)',100,'num'],['nhiet','Nhiệt độ giữ (°C)',90,'num'],['bd','Bắt đầu',130,'dt'],['kt','Kết thúc',130,'dt'],['pdf','Biểu đồ nhiệt',74,'pdf'],['note','Ghi chú',170,'txt']],req:['gi','nang','bd','kt']},
@@ -3206,6 +3206,24 @@ function init(){
   hdSeedIfNeeded();
 }
 init();
+
+/* ===== ĐỒNG BỘ DỮ LIỆU LIÊN MÁY (Google Apps Script) =====
+   Cấu hình CLOUD_URL và CLOUD_KEY sau khi triển khai GAS. */
+const CLOUD_URL='PASTE_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE';
+const CLOUD_KEY='CHANGE_THIS_SHARED_KEY';
+let CLOUD_DIRTY=false,CLOUD_BUSY=false,CLOUD_LAST=0,CLOUD_TIMER=null;
+function cloudEnabled(){return CLOUD_URL.startsWith('https://')&&!CLOUD_URL.includes('PASTE_')&&CLOUD_KEY!=='CHANGE_THIS_SHARED_KEY'}
+function cloudMarkDirty(){if(cloudEnabled()&&!CLOUD_BUSY)CLOUD_DIRTY=true}
+function cloudPack(){return {db:DB,hard:HARD.map(hdPack).join('\
+'),furn:FD,stamp:Date.now()}}
+function cloudApply(x){if(!x||!x.db)return;CLOUD_BUSY=true;try{DB=x.db;HARD=(x.hard||'').split('\
+').filter(Boolean).map(hdUnpack);FD=x.furn||{};localStorage.setItem(LS,JSON.stringify(DB));localStorage.setItem(LS+'_hard',HARD.map(hdPack).join('\
+'));localStorage.setItem(LS+'_furn',JSON.stringify(FD));CLOUD_LAST=Number(x.stamp)||Date.now();CLOUD_DIRTY=false;try{refresh()}catch(e){}}catch(e){console.error('Lỗi áp dụng dữ liệu đồng bộ',e)}finally{CLOUD_BUSY=false}}
+async function cloudGet(){if(!cloudEnabled()||CLOUD_BUSY)return;try{const u=CLOUD_URL+'?key='+encodeURIComponent(CLOUD_KEY)+'&t='+Date.now();const r=await fetch(u,{method:'GET',cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const x=await r.json();if(x&&x.data&&Number(x.stamp)>CLOUD_LAST)cloudApply(x.data);else if(x&&(!x.data||!Number(x.stamp))&&DB.records.length)CLOUD_DIRTY=true}catch(e){console.warn('Đồng bộ tải dữ liệu:',e);cloudStatus('Lỗi kết nối đồng bộ')}}
+async function cloudPush(){if(!cloudEnabled()||!CLOUD_DIRTY||CLOUD_BUSY)return;CLOUD_BUSY=true;try{const payload=cloudPack();const r=await fetch(CLOUD_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:CLOUD_KEY,data:payload})});if(!r.ok)throw new Error('HTTP '+r.status);const x=await r.json();if(x.ok){CLOUD_DIRTY=false;CLOUD_LAST=payload.stamp;cloudStatus('Đã đồng bộ '+new Date().toLocaleTimeString())}else throw new Error(x.error||'Máy chủ từ chối')}catch(e){console.warn('Đồng bộ gửi dữ liệu:',e);cloudStatus('Chưa đồng bộ - '+e.message)}finally{CLOUD_BUSY=false}}
+function cloudStatus(t){let el=document.getElementById('cloud-sync-status');if(!el){el=document.createElement('div');el.id='cloud-sync-status';el.style.cssText='position:fixed;bottom:8px;right:8px;z-index:99999;background:#eef2f7;color:#234;padding:7px 10px;border-radius:8px;font:12px Arial;box-shadow:0 2px 8px #0002';document.body.appendChild(el)}el.textContent='Đồng bộ: '+t}
+function cloudStart(){if(!cloudEnabled()){cloudStatus('Chưa cấu hình URL / KEY');return}cloudStatus('Đang kết nối…');cloudGet().then(()=>{if(!CLOUD_DIRTY)cloudStatus('Đã kết nối')});if(CLOUD_TIMER)clearInterval(CLOUD_TIMER);CLOUD_TIMER=setInterval(()=>{if(CLOUD_DIRTY)cloudPush();else cloudGet()},8000)}
+setTimeout(cloudStart,2500);
 </script>
 </body>
 </html>
