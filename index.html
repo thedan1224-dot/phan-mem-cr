@@ -841,30 +841,43 @@ function groupOf(r){
 }
 function copyGroupInfo(from,to){to.melt=from.melt;to.bar=from.bar;to.i20=(from.i20||[]).slice();to.i40=(from.i40||[]).slice();to.hb=(from.hb||[]).slice();to.tdate=from.tdate;to.tt=from.tt;to.run=from.run}
 /* ===== XLSX reader ===== */
-async function inflateRaw(bytes){const ds=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));return new Uint8Array(await new Response(ds).arrayBuffer())}
+async function inflateRaw(bytes){
+  // Chrome/Edge có phiên bản không hỗ trợ định dạng 'deflate-raw' trong DecompressionStream.
+  // Thử chuẩn raw trước; nếu không hỗ trợ, bọc raw-DEFLATE thành luồng zlib để dùng 'deflate'.
+  try{const ds=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));return new Uint8Array(await new Response(ds).arrayBuffer())}
+  catch(rawErr){
+    if(typeof DecompressionStream==='undefined')throw rawErr;
+    let a=1,b=0;for(let i=0;i<bytes.length;i++){a=(a+bytes[i])%65521;b=(b+a)%65521}
+    const z=new Uint8Array(bytes.length+6);z[0]=0x78;z[1]=0x01;z.set(bytes,2);
+    const ad=((b<<16)|a)>>>0, k=z.length-4;z[k]=(ad>>>24)&255;z[k+1]=(ad>>>16)&255;z[k+2]=(ad>>>8)&255;z[k+3]=ad&255;
+    const ds=new Blob([z]).stream().pipeThrough(new DecompressionStream('deflate'));return new Uint8Array(await new Response(ds).arrayBuffer())
+  }
+}
 async function openZip(buf){
   const dv=new DataView(buf),u8=new Uint8Array(buf);let e=-1;
-  for(let i=buf.byteLength-22;i>=Math.max(0,buf.byteLength-70000);i--){if(dv.getUint32(i,true)===0x06054b50){e=i;break}}
-  if(e<0)throw new Error('Không phải file .xlsx hợp lệ');
+  for(let i=buf.byteLength-22;i>=Math.max(0,buf.byteLength-70000);i--){if(i+4<=buf.byteLength&&dv.getUint32(i,true)===0x06054b50){e=i;break}}
+  if(e<0)throw new Error('Không phải file Excel .xlsx hợp lệ (không tìm thấy cấu trúc ZIP). Hãy lưu lại file dưới định dạng .xlsx.');
   const n=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);const files={};
   for(let k=0;k<n;k++){
-    if(dv.getUint32(p,true)!==0x02014b50)break;
+    if(p+46>buf.byteLength||dv.getUint32(p,true)!==0x02014b50)throw new Error('Cấu trúc file Excel bị lỗi hoặc không được hỗ trợ.');
     const method=dv.getUint16(p+10,true),cs=dv.getUint32(p+20,true),nl=dv.getUint16(p+28,true),el=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),lho=dv.getUint32(p+42,true);
     const name=new TextDecoder().decode(u8.subarray(p+46,p+46+nl));
+    if(lho+30>buf.byteLength)throw new Error('File Excel bị lỗi ở một thành phần dữ liệu.');
     const lnl=dv.getUint16(lho+26,true),lel=dv.getUint16(lho+28,true);
     files[name]={method,start:lho+30+lnl+lel,cs};p+=46+nl+el+cl;
   }
-  return {async text(name){const f=files[name];if(!f)return null;const raw=u8.subarray(f.start,f.start+f.cs);return new TextDecoder('utf-8').decode(f.method===0?raw:await inflateRaw(raw))}};
+  return {async text(name){const f=files[name];if(!f)return null;const raw=u8.subarray(f.start,f.start+f.cs);if(f.method===0)return new TextDecoder('utf-8').decode(raw);if(f.method===8)return new TextDecoder('utf-8').decode(await inflateRaw(raw));throw new Error('File Excel sử dụng kiểu nén chưa hỗ trợ (mã '+f.method+').')}};
 }
-function colIdx(ref){const m=/^([A-Z]+)/.exec(ref);let n=0;for(const ch of m[1])n=n*26+ch.charCodeAt(0)-64;return n-1}
-const parseXml=s=>new DOMParser().parseFromString(s,'application/xml');
+function colIdx(ref){const m=/^([A-Z]+)/i.exec(ref||'');if(!m)return -1;let n=0;for(const ch of m[1].toUpperCase())n=n*26+ch.charCodeAt(0)-64;return n-1}
+const parseXml=s=>{if(!s)throw new Error('Thiếu thành phần XML trong file Excel.');const d=new DOMParser().parseFromString(s,'application/xml');if(d.getElementsByTagName('parsererror').length)throw new Error('Không đọc được cấu trúc XML trong file Excel.');return d};
+function resolveXlsxPath(target){if(!target)throw new Error('File Excel không có đường dẫn sheet hợp lệ.');if(target.startsWith('/'))return target.slice(1);const parts=('xl/'+target).split('/');const out=[];for(const part of parts){if(part==='.'||!part)continue;if(part==='..')out.pop();else out.push(part)}return out.join('/')}
 async function openXlsx(file){
-  if(typeof DecompressionStream==='undefined')throw new Error('Trình duyệt quá cũ, hãy dùng Chrome/Edge/Firefox bản mới hoặc dùng cách dán dữ liệu');
+  if(typeof DecompressionStream==='undefined')throw new Error('Trình duyệt không hỗ trợ đọc Excel trực tiếp. Hãy dùng Chrome hoặc Edge bản mới.');
   const zip=await openZip(await file.arrayBuffer());
   const wb=parseXml(await zip.text('xl/workbook.xml'));
   const rels=parseXml(await zip.text('xl/_rels/workbook.xml.rels'));
   const relMap={};[...rels.getElementsByTagName('Relationship')].forEach(r=>relMap[r.getAttribute('Id')]=r.getAttribute('Target'));
-  const sheets=[...wb.getElementsByTagName('sheet')].map(s=>{let tg=relMap[s.getAttribute('r:id')]||'';tg=tg.startsWith('/')?tg.slice(1):'xl/'+tg;return {name:s.getAttribute('name'),path:tg}});
+  const sheets=[...wb.getElementsByTagName('sheet')].map(s=>{const rid=s.getAttribute('r:id');const tg=relMap[rid]||'';return {name:s.getAttribute('name'),path:resolveXlsxPath(tg)}});
   let sst=null;
   async function getSST(){
     if(sst)return sst;sst=[];const x=await zip.text('xl/sharedStrings.xml');if(!x)return sst;
@@ -879,7 +892,8 @@ async function openXlsx(file){
         const ref=c.getAttribute('r');if(!ref)continue;const t=c.getAttribute('t');let v='';const ve=c.getElementsByTagName('v')[0];
         if(t==='inlineStr'){v=[...c.getElementsByTagName('t')].map(x=>x.textContent).join('')}
         else if(ve){v=ve.textContent;if(t==='s')v=ss[+v]??'';else if(!t||t==='n'){const n=Number(v);if(isFinite(n)&&/\.\d{9,}/.test(v))v=String(parseFloat(n.toPrecision(12)))}}
-        const i=colIdx(ref);while(r.length<i)r.push('');r[i]=v;
+        else if(t==='str')v='';
+        const i=colIdx(ref);if(i<0)continue;while(r.length<i)r.push('');r[i]=v;
       }
       out.push(r);
     }
@@ -3180,7 +3194,7 @@ function init(){
         return `<tr><td>${esc(s.name)}</td><td><select data-i="${i}">${opts.map(o=>`<option value="${o[0]}" ${o[0]===def?'selected':''}>${o[1]}</option>`).join('')}</select></td></tr>`}).join('')+'</tbody></table>';
       $('x-act').style.display='flex';
       if(!XL.sheets.some(s=>normName(s.name)==='tong'))msg($('x-msg'),'Không thấy sheet tên "Tổng" — hãy chọn sheet cần nhập ở bảng trên.',true);
-    }catch(err){msg($('x-msg'),'Không đọc được file: '+err.message,true)}
+    }catch(err){XL=null;$('x-act').style.display='none';msg($('x-msg'),'Không đọc được file: '+(err&&err.message?err.message:String(err))+' — hãy thử lưu lại Excel dạng .xlsx rồi chọn lại file.',true)}finally{e.target.value=''}
   };
   $('x-go').onclick=async()=>{
     if(!XL||!auGuard('data','nhập dữ liệu'))return;
